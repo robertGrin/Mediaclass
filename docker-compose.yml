@@ -1,28 +1,13 @@
-version: '3.8'
+ersion: '3.8'
 
 services:
-  db:
-    image: postgres:15
-    volumes:
-    environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=mediaclass_db
-    ports:
-      - "5432:5432"
-
   web:
     build: .
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
-    volumes:
-      - .:/app
+    container_name: mediaclass_app
+    command: uvicorn main:app --host 0.0.0.0 --port 80
+    restart: always
     ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/mediaclass_db
-      - SECRET_KEY=change_this_secret_in_prod
-    depends_on:
-      - db
-
-volumes:
-  postgres_data:
+      - "80:80"
+    volumes:
+      - ./quiz.db:/app/quiz.db
+      - ./static/avatars:/app/static/avatars
