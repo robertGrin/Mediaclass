@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.venv/
+
+# Database (не загружаем локальную базу с тестовыми юзерами)
+*.db
+*.sqlite3
+
+# Environment variables
+.env
+
+# MacOS system files
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# User uploads (не загружаем аватарки пользователей)
+static/avatars/*
+!static/avatars/.gitkeep
