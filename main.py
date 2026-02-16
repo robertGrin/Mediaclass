@@ -40,6 +40,7 @@ class User(Base):
     position = Column(String, default="")
     is_admin = Column(Boolean, default=False)
     avatar = Column(String, nullable=True)
+    allowed_attempts = Column(Integer, default=1) # Количество разрешенных попыток
 
     results = relationship("Result", back_populates="user")
 
@@ -84,10 +85,18 @@ class QuestionOut(BaseModel):
     type: str
     options: Optional[List[str]] = None
 
+class ResultOut(BaseModel):
+    id: int
+    score: int
+    max_score: int
+    submitted_at: datetime.datetime
+
 class AdminResultOut(BaseModel):
     id: int
+    user_id: int
     user_name: str
     user_email: str
+    user_phone: str # Добавлено
     score: int
     max_score: int
     submitted_at: datetime.datetime
@@ -105,7 +114,7 @@ app.add_middleware(
 )
 
 if not os.path.exists("static/avatars"):
-    os.makedirs("static/avatars")
+    os.makedirs("static/avatars", exist_ok=True)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -132,32 +141,33 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     if user is None: raise HTTPException(status_code=401)
     return user
 
-# --- ВОПРОСЫ (ВСЕ 20) ---
+# --- СЕДИНГ ВОПРОСОВ ---
 def seed_questions(db: Session):
     if db.query(Question).count() > 0:
         return
 
     questions_data = [
         {"text": "1. Какие предметы нужны для поступления в проект «Медиакласс в московской школе» (несколько вариантов)?", "type": "multiple", "options": ["Литература", "Обществознание", "История", "Иностранный язык"], "correct_answer": ["Литература", "Иностранный язык"]},
-        {"text": "2. Ситуация: Выпускник 9-го класса хочет в проект. ОГЭ: математика – 3, русский – 4, литература – 5, ин. язык – 3. Возьмут?", "type": "single", "options": ["Да", "Нет"], "correct_answer": ["Нет"]},
-        {"text": "3. Ситуация: ОГЭ: математика – 4, русский – 4, обществознание – 5, география – 3. Возьмут?", "type": "single", "options": ["Да", "Нет"], "correct_answer": ["Да"]},
+        {"text": "2. Вы столкнулись с ситуацией: Выпускник 9-го класса хочет поступить в класс проекта. При этом имеет следующие результаты ОГЭ: математика – 3, русский язык 4, литература 5, иностранный язык 3", "type": "single", "options": ["Да", "Нет"], "correct_answer": ["Нет"]},
+        {"text": "3. Вы столкнулись с ситуацией: Выпускник 9-го класса хочет поступить в класс проекта. При этом имеет следующие результаты ОГЭ: математика – 4, русский язык - 4, обществознание - 5, география – 3", "type": "single", "options": ["Да", "Нет"], "correct_answer": ["Да"]},
         {"text": "4. В каких случаях вы НЕ можете зачислить ученика? (несколько вариантов)", "type": "multiple", "options": ["Ученик сдавал доп. ОГЭ: информатика, химия", "Средний балл ОГЭ 4", "Ученик имеет 3 по литературе и английскому", "Ученик после 1 курса колледжа"], "correct_answer": ["Ученик имеет 3 по литературе и английскому", "Ученик после 1 курса колледжа"]},
-        {"text": "5. Можно ли осуществить перевод в класс проект 14 января?", "type": "single", "options": ["Да", "Нет (только до 31 декабря)"], "correct_answer": ["Нет (только до 31 декабря)"]},
-        {"text": "6. Какое минимальное количество баллов по результатам ЕГЭ по каждому из трех предметов должен набрать обучающийся, чтобы считаться завершившим обучение в классе проекта? Учитывая, что обучающийся, согласно Стандарту, сдавал русский язык и два предмета, изучаемых на углубленном уровне (английский язык, литература или обществознание).", "type": "single", "options": ["Не менее 60 баллов", "Не менее 45 баллов"], "correct_answer": ["Не менее 60 баллов"]},
+        {"text": "5. Можно ли осуществить перевод в класс проект 14 января?", "type": "single", "options": ["Да, можно осуществить перевод из профильного класса в класс Проект", "Нет, перевод возможно осуществить только в первом полугодии 10-го класса до 31 декабря"], "correct_answer": ["Нет, перевод возможно осуществить только в первом полугодии 10-го класса до 31 декабря"]},
+        {"text": "6. Не менее скольких баллов ЕГЭ нужно по Русскому и двум профильным?", "type": "single", "options": ["Не менее 60 баллов", "Не менее 45 баллов"], "correct_answer": ["Не менее 60 баллов"]},
         {"text": "7. По какому профилю реализуется обучение?", "type": "single", "options": ["Технический", "Естественно-научный", "Гуманитарный", "Универсальный"], "correct_answer": ["Гуманитарный"]},
         {"text": "8. В какой форме осуществляется обучение?", "type": "single", "options": ["Очно", "Заочно", "Очно-заочно", "Дистанционно"], "correct_answer": ["Очно"]},
         {"text": "9. Программы проф. подготовки в колледже (несколько)?", "type": "multiple", "options": ["Оператор видеозаписи", "Фотограф", "Оформитель табло", "Корректор СМИ"], "correct_answer": ["Оператор видеозаписи", "Фотограф", "Оформитель табло"]},
-        {"text": "10. Условия завершения обучения (несколько)?", "type": "multiple", "options": ["ЕГЭ Русский 60+", "ЕГЭ Профильные 60+", "Мероприятия 75%+", "Физкультура 90%+"], "correct_answer": ["ЕГЭ Русский 60+", "ЕГЭ Профильные 60+", "Мероприятия 75%+"]},
-        {"text": "11. Условия для «Сертификата с отличием» (несколько)?", "type": "multiple", "options": ["ЕГЭ выше среднегородских", "Победа в конкурсах", "Золотой знак ГТО", "Медиацентр 3 года"], "correct_answer": ["ЕГЭ выше среднегородских", "Победа в конкурсах"]},
-        {"text": "12. Минимальная наполняемость класса?", "type": "single", "options": ["20", "22", "25", "30"], "correct_answer": ["25"]},
-        {"text": "13. Цель конкурса «Интеллектуальный мегаполис»?", "type": "single", "options": ["Стажировки", "Диагностика и оценка", "ЕГЭ", "Портфолио"], "correct_answer": ["Диагностика и оценка"]},
-        {"text": "14. Баллы победителя в «Интеллектуальный мегаполис»?", "type": "single", "options": ["60–79", "80–99", "100–120", "121–140"], "correct_answer": ["100–120"]},
-        {"text": "15. Возможна ли апелляция?", "type": "single", "options": ["Да, 3 дня", "Да, неделя", "Нет", "Только практика"], "correct_answer": ["Нет"]},
-        {"text": "16. Предметы теоретического этапа?", "type": "single", "options": ["Рус, Ист, Лит", "Лит, Общ, Ин.яз", "Инф, Мат", "Био, Хим"], "correct_answer": ["Лит, Общ, Ин.яз"]},
-        {"text": "17. Заболел перед экзаменом. Куда писать?", "type": "single", "options": ["mediaclass@mpgu.ru", "help@mcko.ru"], "correct_answer": ["help@mcko.ru"]},
-        {"text": "18. Срок сдачи листа обратной связи?", "type": "single", "options": ["До 31 Мая", "До 1 Июля", "До ЕГЭ"], "correct_answer": ["До 31 Мая"]},
-        {"text": "19. Обязанности Куратора (несколько)?", "type": "multiple", "options": ["Регистрация на мероприятия", "Информирование", "Сайт школы", "Приказы"], "correct_answer": ["Регистрация на мероприятия", "Информирование", "Сайт школы"]},
-        {"text": "20. Требование к педагогам?", "type": "single", "options": ["Стаж 20 лет", "Свидетельство МЦКО / Ученая степень", "Второе высшее", "Учебник"], "correct_answer": ["Свидетельство МЦКО / Ученая степень"]}
+        {"text": "10. Условия завершения обучения (несколько)?", "type": "multiple", "options": ["Не менее 60 баллов ЕГЭ по русскому языку", "Не менее 60 баллов ЕГЭ по двум профильным предметам (каждому) из: литература / иностранный / обществознание", "Посещение обязательных мероприятий не менее 75% часов (в совокупности)", "Не менее 90% посещаемости уроков физкультуры"], "correct_answer": ["Не менее 60 баллов ЕГЭ по русскому языку", "Не менее 60 баллов ЕГЭ по двум профильным предметам (каждому) из: литература / иностранный / обществознание", "Посещение обязательных мероприятий не менее 75% часов (в совокупности)"]},
+        {"text": "11. При каких условиях обучающийся получит «Сертификат с отличием»? (несколько вариантов)", "type": "multiple", "options": ["Сумма результатов ЕГЭ (русский + 2 углубленных) не ниже суммы среднегородских баллов", "Победа/призерство в открытой городской научно-практической конференции «Наука для жизни» и/или «Интеллектуальный мегаполис. Потенциал» и/или «Медиатон» за период обучения.", "Обязательное наличие золотого знака ГТО", "Стажирвока в медиацентре ВУЗа"], "correct_answer": ["Сумма результатов ЕГЭ (русский + 2 углубленных) не ниже суммы", "Победа/призерство в открытой городской научно-практической конференции «Наука для жизни» и/или «Интеллектуальный мегаполис. Потенциал» и/или «Медиатон» за период обучения."]},
+        {"text": "12. Какова минимальная наполняемость класса для открытия класса Проекта?", "type": "single", "options": ["Не менее 20 человек", "Не менее 22 человек", "Не менее 25 человек", "Не менее 30 человек"], "correct_answer": ["Не менее 25 человек"]},
+        {"text": "13. Основная цель проведения Конкурса «Интеллектуальный мегаполис. Потенциал»:", "type": "single", "options": ["Отбор участников на стажировки в медиакомпании", "Диагностика функциональной грамотности и межпредметных связей + независимая оценка подготовки 11-классников предпрофобразования", "Подготовка к ЕГЭ по профильным предметам", "Формирование портфолио достижений для МЭШ"], "correct_answer": ["Диагностика функциональной грамотности и межпредметных связей + независимая оценка подготовки 11-классников предпрофобразования"]},
+        {"text": "14. Диапазон баллов для получения диплома победителя в «Интеллектуальный мегаполис. Потенциал»:", "type": "single", "options": ["60–79", "80–99", "100–120", "121–140"], "correct_answer": ["100–120"]},
+        {"text": "15. Возможна ли подача апелляций по результатам Конкурса «Интеллектуальный мегаполис. Потенциал»?", "type": "single", "options": ["Да,в течении 3 дней", "Да, в течении недели", "Нет, апелляции не предусмотрены", "Да, Только по практическому этапу"], "correct_answer": ["Нет, аппеляции не предусмотрены"]},
+        {"text": "16. На каких предметах базируется теоретический этап направления «Медиа» в Конкурсе «Интеллектуальный мегаполис. Потенциал»?", "type": "single", "options": ["Русский язык, История, Литература", "Литература, Обществознание, Иностранный язык (по выбору)", "Информатика, Математика, Физика", "Биология, Химия"], "correct_answer": ["Литература, Обществознание, Иностранный язык (по выбору)"]},
+        {"text": "17. Ситуация. Обучающийся зарегистрирован на сдачу теоретического этапа 13 января 2025 года. Обучающийся по состоянию здоровья не может присутствовать на экзамене. Куда необходимо направить письмо с просьбой перенести экзамен?", "type": "single", "options": ["mediaclass@mpgu.ru", "help@mcko.ru"], "correct_answer": ["help@mcko.ru"]},
+        {"text": "18. Ситуация. Ваша школа организовала встречу с представителем медиасферы. Выберите крайний срок, когда куратор может направить лист обратной связи в Проектный офис, чтобы встреча была зачтена в образовательном маршруте.", "type": "single", "options": ["До 31 Мая", "До 1 Июля", "До ЕГЭ"], "correct_answer": ["До 31 Мая"]},
+        {"text": "19. Какие обязанности относятся к функциям Куратора Проекта? (несколько вариантов)", "type": "multiple", "options": ["Регистрировать обучающихся на мероприятия партнеров и организовывать их посещение", "Своевременно информировать обучающихся о мероприятиях Проекта, размещенных на порталах","Размещать информацию о ходе реализации Проекта на официальном сайте школы", "Утверждать перечень школ-участников приказом"], "correct_answer": ["Регистрировать обучающихся на мероприятия партнеров и организовывать их посещение", "Своевременно информировать обучающихся о мероприятиях Проекта, размещенных на порталах", "Размещать информацию о ходе реализации Проекта на официальном сайте школы"]},
+        {"text": "20. Какие требования предъявляются к педагогам?", "type": "single", "options": ["Стаж не менее 20 лет", "Наличие Свидетельства МЦКО / Ученой степени", "Наличие Второго высшего образования", "Учебник"], "correct_answer": ["Наличие Свидетельства МЦКО / Ученой степени"]},
+        {"text": "21. Ситуация. Ученик решил перейти в другую школу, а обучение по программе ПОБГ уже началось. Каков алгоритм действия куратора проекта «Медиакласс в московской школе»?", "type": "single", "options": ["Связываемся в МАХ с представителем колледжа. Объясняем ситуацию", "Составляем на бланке организации информационное письмо с просьбой отчислить обучающегося с указанием наименования колледжа и профессии. Отправляет секретарь через МосЭДО в МЦРПО (на имя директора). Далее дублирование на электронную почту: ГАОУ ДПО МЦРПО, pobg@edu.mos.ru, ИРПО ГАОУ ВО МГПУ, Медиакласс: mediaclass@mgpu.ru, официальная почта колледжа"], "correct_answer": ["Составляем на бланке организации информационное письмо с просьбой отчислить обучающегося с указанием наименования колледжа и профессии. Отправляет секретарь через МосЭДО в МЦРПО (на имя директора). Далее дублирование на электронную почту: ГАОУ ДПО МЦРПО, pobg@edu.mos.ru, ИРПО ГАОУ ВО МГПУ, Медиакласс: mediaclass@mgpu.ru, официальная почта колледжа"]}
     ]
 
     for q in questions_data:
@@ -177,7 +187,7 @@ def startup():
     
     if not db.query(User).filter(User.email == "admin@admin.com").first():
         try:
-            admin = User(email="admin@admin.com", hashed_password=pwd_context.hash("admin"), full_name="Администратор", is_admin=True)
+            admin = User(email="admin@admin.com", hashed_password=pwd_context.hash("admin"), full_name="Администратор", is_admin=True, allowed_attempts=999)
             db.add(admin)
             db.commit()
         except: pass
@@ -199,7 +209,15 @@ def register(data: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == data.email).first():
         raise HTTPException(status_code=400, detail="Email занят")
     
-    user = User(email=data.email, hashed_password=pwd_context.hash(data.password), full_name=data.name, phone=data.phone, work=data.work, position=data.pos)
+    user = User(
+        email=data.email,
+        hashed_password=pwd_context.hash(data.password),
+        full_name=data.name,
+        phone=data.phone,
+        work=data.work,
+        position=data.pos,
+        allowed_attempts=1 # По умолчанию 1 попытка
+    )
     db.add(user)
     db.commit()
     return {"msg": "OK"}
@@ -214,8 +232,33 @@ def login(data: UserLogin, db: Session = Depends(get_db)):
     return {"access_token": token}
 
 @app.get("/me")
-def me(user: User = Depends(get_current_user)):
-    return {"full_name": user.full_name, "email": user.email, "is_admin": user.is_admin, "work": user.work, "avatar": user.avatar}
+def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Получаем историю тестов
+    history = []
+    # Сортируем по дате, чтобы нумерация была хронологической
+    sorted_results = sorted(user.results, key=lambda x: x.submitted_at)
+    
+    for idx, r in enumerate(sorted_results):
+        history.append({
+            "id": r.id,
+            "attempt_number": idx + 1, # Персональный номер попытки (1, 2, 3...)
+            "score": r.score,
+            "max_score": r.max_score,
+            "submitted_at": r.submitted_at
+        })
+    
+    can_retake = len(user.results) < user.allowed_attempts
+
+    return {
+        "full_name": user.full_name, 
+        "email": user.email, 
+        "is_admin": user.is_admin, 
+        "work": user.work, 
+        "avatar": user.avatar,
+        "position": user.position,
+        "history": history,
+        "can_retake": can_retake
+    }
 
 @app.post("/users/me/avatar")
 async def upload_avatar(file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -229,11 +272,17 @@ async def upload_avatar(file: UploadFile = File(...), user: User = Depends(get_c
     return {"url": user.avatar}
 
 @app.get("/questions", response_model=List[QuestionOut])
-def get_qs(db: Session = Depends(get_db)):
+def get_qs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Проверка на право пересдачи
+    if len(user.results) >= user.allowed_attempts and not user.is_admin:
+        raise HTTPException(status_code=400, detail="У вас закончились попытки")
     return db.query(Question).all()
 
 @app.post("/submit")
 def submit_quiz(sub: Submission, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if len(user.results) >= user.allowed_attempts and not user.is_admin:
+        raise HTTPException(status_code=400, detail="У вас закончились попытки")
+
     questions = db.query(Question).all()
     q_map = {q.id: q for q in questions}
     score = 0
@@ -272,8 +321,38 @@ def admin_res(user: User = Depends(get_current_user), db: Session = Depends(get_
     results = db.query(Result).all()
     out = []
     for r in results:
-        out.append({"id": r.id, "user_name": r.user.full_name, "user_email": r.user.email, "score": r.score, "max_score": r.max_score, "submitted_at": r.submitted_at, "answers": r.answers})
+        out.append({
+            "id": r.id, 
+            "user_id": r.user.id,
+            "user_name": r.user.full_name, 
+            "user_email": r.user.email, 
+            "user_phone": r.user.phone, # Добавлено
+            "score": r.score, 
+            "max_score": r.max_score, 
+            "submitted_at": r.submitted_at, 
+            "answers": r.answers
+        })
     return out
+
+# Новые функции админа
+@app.post("/admin/allow_retry/{user_id}")
+def allow_retry(user_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.is_admin: raise HTTPException(status_code=403)
+    target_user = db.query(User).filter(User.id == user_id).first()
+    if target_user:
+        # ЛОГИКА ИЗМЕНЕНА: Лимит = (количество реально пройденных попыток) + 1
+        # Это дает пользователю ровно одну новую попытку, независимо от старого лимита
+        passed_attempts = len(target_user.results)
+        target_user.allowed_attempts = passed_attempts + 1
+        db.commit()
+    return {"status": "ok"}
+
+@app.post("/admin/issue_certificate/{user_id}")
+def issue_cert(user_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not user.is_admin: raise HTTPException(status_code=403)
+    # Тут будет логика генерации и отправки PDF
+    # Пока заглушка
+    return {"status": "sent", "message": "Сертификат отправлен на почту"}
 
 if __name__ == "__main__":
     import uvicorn
